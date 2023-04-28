@@ -1,0 +1,234 @@
+// create and populate all tables in DWH
+
+CREATE OR REPLACE TABLE "DATE_DIM"
+AS
+WITH "GAPLESS_ROW_NUMBERS" AS (
+  SELECT
+    ROW_NUMBER() OVER (ORDER BY seq4()) - 1 as "ROW_NUMBER" 
+  FROM TABLE(GENERATOR(rowcount => 366 * (2100 - 1970)) ) -- rowcount is 366 days x (2100 - 1970) years to cover leap years. A later filter can remove the spillover days
+)
+SELECT
+    DATEADD('day', "ROW_NUMBER", DATE(0)) as "DATE_NM" 
+  , EXTRACT(year FROM "DATE_NM") as "YEAR"
+  , EXTRACT(month FROM "DATE_NM") as "MONTH"
+  , EXTRACT(day FROM "DATE_NM") as "DAY"
+FROM "GAPLESS_ROW_NUMBERS"
+WHERE "YEAR" < 2024;
+
+ALTER table date_dim ADD PRIMARY KEY (date_nm);
+
+create or replace table business_dim(
+    business_id varchar(25) primary key,
+    business_nm varchar(90),
+    avg_stars float
+);
+    
+insert into business_dim(business_id, business_nm, avg_stars)
+select distinct 
+    bus_id, 
+    bus_nm, 
+    bus_stars
+from "UDACITYPROJECT"."ODS".ods_business;
+
+create or replace table yelp_user_dim(
+    user_id varchar(25) primary key,
+    user_nm varchar(100),
+    yelping_since date
+);
+    
+insert into yelp_user_dim(user_id, user_nm, yelping_since)
+select distinct 
+    user_id, 
+    user_nm, 
+    yelping_since
+from "UDACITYPROJECT"."ODS".ods_yelp_user;
+
+create or replace table location_dim(
+    location_id number autoincrement primary key,
+    lat float,
+    lon float
+);
+    
+insert into location_dim(lat, lon)
+select distinct
+    bus_lat, 
+    bus_lon
+from "UDACITYPROJECT"."ODS".ODS_BUSINESS;
+
+create or replace table climate_dim(
+    date_nm date primary key,
+    prec float,
+    prec_norm float,
+    temp_min float,
+    temp_max float,
+    norm_min float,
+    norm_max float);
+    
+insert into climate_dim(date_nm, prec, prec_norm, temp_min, temp_max, norm_min, norm_max)
+select 
+    t.temp_date,
+    p.prec, 
+    p.prec_norm,
+    t.temp_min,
+    t.temp_max,
+    t.norm_min, 
+    t.norm_max
+from "UDACITYPROJECT"."ODS".ods_precipitation p
+join "UDACITYPROJECT"."ODS".ods_temperature t
+on p.prec_date = t.temp_date;
+
+
+create or replace table review_facts(
+    date_nm date,
+    business_id varchar(25),
+    user_id varchar(25),
+    loc_id number,
+    stars number
+);
+
+insert into review_facts(date_nm, business_id, user_id, loc_id, stars)
+SELECT distinct
+    d.date_nm, 
+    bd.business_id, 
+    u.user_id, 
+    l.location_id, 
+    r.stars
+FROM "UDACITYPROJECT"."ODS".ods_review AS r
+inner JOIN date_dim AS d
+ON r.rev_date = d.date_nm
+inner JOIN business_dim AS bd
+ON r.rev_bus_id = bd.business_id
+inner JOIN yelp_user_dim AS u
+ON r.rev_user_id = u.user_id
+inner join climate_dim c
+on r.rev_date = c.date_nm
+inner join "UDACITYPROJECT"."ODS".ods_business as b
+on rev_bus_id = b.bus_id
+inner join location_dim as l
+on b.bus_lat = l.lat
+and b.bus_lon = l.lon;
+
+// add foreign keys to fact table
+
+ALTER TABLE review_facts ADD FOREIGN KEY (date_nm) REFERENCES climate_dim(date_nm); 
+ALTER TABLE review_facts ADD FOREIGN KEY (business_id) REFERENCES business_dim(business_id);
+ALTER TABLE review_facts ADD FOREIGN KEY (user_id) REFERENCES yelp_user_dim(user_id);
+ALTER TABLE review_facts ADD FOREIGN KEY (loc_id) REFERENCES location_dim(location_id);
+ALTER TABLE review_facts ADD FOREIGN KEY (date_nm) REFERENCES date_dim(date_nm); 
+
+// create one additional table to store the position of the weather station
+
+create or replace table las_vegas_position(
+    position_id number primary key,
+    latitude float,
+    longitude float);
+    
+insert into las_vegas_position
+values
+    (1, 36.114647, -115.172813);
+
+create or replace view closer_locations as 
+select *
+from location_dim a
+inner join las_vegas_position b
+on haversine(a.lat, a.lon, b.latitude, b.longitude) <= 500
+;
+
+/*create or replace table temp_classification(
+    weather_id number primary key,
+    weather varchar (20),
+    min_temp int,
+    max_temp int  
+);
+
+insert into temp_classification 
+values
+    (1, 'freezing', 0, 45),
+    (2, 'cold', 45, 54),
+    (3, 'cool', 54, 68),
+    (4, 'warm', 68, 80),
+    (5, 'hot', 80, 93),
+    (6, 'very hot', 93, 200);
+    
+*/
+
+// add the classification of the temperature and precipitation
+    
+ALTER TABLE climate_dim 
+add weather_class varchar(20); 
+   
+UPDATE climate_dim
+SET weather_class = 'freezing'
+WHERE temp_max between 0 and 45;
+UPDATE climate_dim
+SET weather_class = 'cold'
+WHERE temp_max between 45 and 54;
+UPDATE climate_dim
+SET weather_class = 'cool'
+WHERE temp_max between 54 and 68;
+UPDATE climate_dim
+SET weather_class = 'warm'
+WHERE temp_max between 68 and 80;
+UPDATE climate_dim
+SET weather_class = 'hot'
+WHERE temp_max between 80 and 93;
+UPDATE climate_dim
+SET weather_class = 'very hot'
+WHERE temp_max between 93 and 200;
+
+ALTER TABLE climate_dim 
+add rain_class varchar(20);
+
+UPDATE climate_dim
+SET rain_class = 'not rainy'
+WHERE prec <= 0.1;
+
+UPDATE climate_dim
+SET rain_class = 'rainy'
+WHERE prec > 0.1;
+
+//select *
+//from temperature_dim
+//where temp_max is NULL;
+
+// first query to display if there is a correlation between weather data and ratings
+
+SELECT c.weather_class, c.rain_class, count(r.stars) as number_review, round(avg(r.stars), 2) as ratings_avg
+FROM review_facts r
+join climate_dim c
+on c.date_nm = r.date_nm
+GROUP BY weather_class, rain_class
+ORDER BY ratings_avg DESC;
+
+// enhancement of the first query, where only the reviews related to restaurants closer to the weather station (within 500km radius) are considered (assumption: same weather)
+
+SELECT c.weather_class, c.rain_class, count(r.stars) as number_review, round(avg(r.stars), 2) as ratings_avg
+FROM review_facts r
+join climate_dim c
+on r.date_nm = c.date_nm
+join closer_locations l
+on r.loc_id = l.location_id
+GROUP BY weather_class, rain_class
+ORDER BY ratings_avg DESC;
+
+//query displaying the names of the restaurants, as requested in the excercise
+
+select b.business_nm, c.temp_min, c.temp_max, c.prec, count(r.stars) as review_number, round(avg(r.stars), 2) as ratings_avg
+from review_facts r
+join business_dim b
+on r.business_id = b.business_id
+join climate_dim c
+on c.date_nm = r.date_nm
+GROUP BY business_nm, temp_min, temp_max, prec
+order by business_nm, ratings_avg desc;
+
+// same as before, but using weather classification instead of single values
+
+select b.business_nm, c.weather_class, c.rain_class, count(r.stars) as review_number, round(avg(r.stars), 2) as ratings_avg
+from review_facts r
+join business_dim b
+on r.business_id = b.business_id
+join climate_dim c
+on c.date_nm = r.date_nm
+GROUP BY business_nm, weather_class, rain_class
+order by business_nm, ratings_avg desc;

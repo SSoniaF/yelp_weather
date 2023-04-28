@@ -1,0 +1,171 @@
+// create tables for ODS area
+
+create or replace table ods_temperature(
+temp_date date not null,
+temp_min int,
+temp_max int,
+norm_min float,
+norm_max float
+);
+
+create or replace table ods_precipitation(
+prec_date date not null,
+prec float,
+prec_norm float
+);
+
+create or replace table ods_covid(
+covid_bus_id varchar(25) not null,
+banner varchar,
+del_or_takeout varchar,
+virtual_service varchar
+);
+
+create or replace table ods_business(
+bus_id varchar(25) not null,
+bus_nm varchar(90),
+bus_lat float not null,
+bus_lon float not null,
+bus_stars float,
+bus_reviews number
+);
+
+create or replace table ods_review(
+review_id varchar(25) not null,
+rev_bus_id varchar(25) not null,
+rev_user_id varchar(25) not null,
+rev_text varchar(5000),
+stars number not null,
+rev_date date not null
+);
+
+create or replace table ods_checkin(
+check_bus_id varchar(25) not null,
+check_dates variant
+);
+
+create or replace table ods_yelp_user(
+user_id varchar(25) not null,
+review_count number,
+avg_stars float,
+user_nm varchar(100),
+yelping_since date
+);
+
+create or replace table ods_tip(
+tip_user_id varchar(25) not null,
+tip_bus_id varchar(25) not null,
+tip_date date,
+tip_text varchar(500)
+);
+
+// copy data from staging schema to ODS schema
+
+//DELETE FROM "UDACITYPROJECT"."STAGING".stg_tip
+//WHERE business_id IS NULL;
+
+INSERT INTO ods_tip(tip_user_id, tip_bus_id, tip_date, tip_text) 
+SELECT 
+user_id, 
+business_id, 
+tip_date,
+tip_text
+	FROM "UDACITYPROJECT"."STAGING".stg_tip;
+
+  
+INSERT INTO ods_checkin(check_bus_id, check_dates) 
+SELECT 
+business_id, 
+CAST(dates as VARIANT)
+	FROM "UDACITYPROJECT"."STAGING".stg_checkin;   
+
+INSERT INTO ods_yelp_user(user_id, review_count, avg_stars, user_nm, yelping_since) 
+SELECT 
+user_id, 
+review_count,
+avg_stars,
+name,
+yelping_since
+	FROM "UDACITYPROJECT"."STAGING".stg_yelp_user;
+    
+INSERT INTO ods_review(review_id, rev_bus_id, rev_user_id, rev_text, stars, rev_date) 
+SELECT 
+review_id,
+business_id ,
+user_id,
+rev_text,
+stars,
+rev_date
+	FROM "UDACITYPROJECT"."STAGING".stg_review;
+    
+INSERT INTO ods_business(bus_id, bus_nm, bus_lat, bus_lon, bus_stars, bus_reviews) 
+SELECT 
+business_id,
+name,
+latitude,
+longitude,
+stars,
+review_count
+	FROM "UDACITYPROJECT"."STAGING".stg_business;
+    
+
+INSERT INTO ods_covid(covid_bus_id, banner, del_or_takeout, virtual_service) 
+SELECT 
+business_id,
+covid_banner,
+del_or_take,
+virtual_service 
+	FROM "UDACITYPROJECT"."STAGING".stg_covid;   
+
+INSERT INTO ods_temperature(temp_date, temp_min, temp_max, norm_min, norm_max) 
+SELECT 
+    to_date(to_varchar(temp_date),'YYYYMMDD'),
+    temp_min,
+    temp_max,
+    normal_min,
+    normal_max 
+	FROM "UDACITYPROJECT"."STAGING".stg_temperature;
+    
+INSERT INTO ods_precipitation(prec_date, prec, prec_norm) 
+SELECT 
+    to_date(to_varchar(prec_date),'YYYYMMDD'),
+    to_double(replace(prec,'T','0.0')),
+    prec_normal 
+	FROM "UDACITYPROJECT"."STAGING".stg_precipitation;
+
+ALTER table ods_tip ADD PRIMARY KEY (tip_user_id, tip_bus_id);
+ALTER table ods_business ADD PRIMARY KEY (bus_id);
+ALTER table ods_yelp_user ADD PRIMARY KEY (user_id);
+ALTER table ods_checkin ADD PRIMARY KEY (check_bus_id);
+ALTER table ods_covid ADD PRIMARY KEY (covid_bus_id);
+ALTER table ods_precipitation ADD PRIMARY KEY (prec_date);
+ALTER table ods_temperature ADD PRIMARY KEY (temp_date);
+ALTER table ods_review ADD PRIMARY KEY (review_id);
+
+ALTER TABLE ods_tip ADD FOREIGN KEY (tip_user_id) REFERENCES ods_yelp_user(user_id); 
+ALTER TABLE ods_tip ADD FOREIGN KEY (tip_bus_id) REFERENCES ods_business(bus_id);
+ALTER TABLE ods_review ADD FOREIGN KEY (rev_user_id) REFERENCES ods_yelp_user(user_id);
+ALTER TABLE ods_review ADD FOREIGN KEY (rev_user_id) REFERENCES ods_business(bus_id);
+ALTER TABLE ods_checkin ADD FOREIGN KEY (check_bus_id) REFERENCES ods_business(bus_id);
+ALTER TABLE ods_covid ADD FOREIGN KEY (covid_bus_id) REFERENCES ods_business(bus_id);
+ALTER TABLE ods_temperature ADD FOREIGN KEY (temp_date) REFERENCES ods_review(rev_date);
+ALTER TABLE ods_precipitation ADD FOREIGN KEY (prec_date) REFERENCES ods_review(rev_date);
+
+//drop table ods_tip;
+//drop table ods_precipitation;
+//drop table ods_review;
+//drop table ods_temperature;
+//drop table ods_yelp_user;
+//drop table ods_business;
+//drop table ods_covid;
+//drop table ods_checkin;
+
+// validate loaded data
+    
+select *
+from ods_temperature
+where temp_max is NULL;
+
+delete 
+from ods_temperature
+where temp_max IS NULL;

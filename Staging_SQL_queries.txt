@@ -1,0 +1,224 @@
+// create tables for staging area
+
+create or replace table stg_temperature(
+temp_date int,
+temp_max float,
+temp_min float,
+normal_max float,
+normal_min float
+);
+
+create or replace table stg_precipitation(
+prec_date int,
+prec string,
+prec_normal float
+);
+
+create or replace table stg_covid(
+business_id varchar,
+highlights varchar,
+del_or_take varchar,
+grubhub varchar,
+call_to_act varchar,
+req_a_quote varchar,
+covid_banner varchar,
+temp_closed varchar,
+virtual_service varchar
+);
+
+create or replace table stg_business(
+business_id varchar,
+name varchar,
+address varchar,
+city varchar,
+state varchar,
+post_code varchar,
+latitude float,
+longitude float,
+stars float,
+review_count number,
+is_open number,
+attributes object,
+categories varchar,
+hours object
+);
+
+create or replace table stg_review(
+review_id varchar,
+user_id varchar,
+business_id varchar,
+stars number,
+rev_date date,
+rev_text varchar,
+useful number,
+funny number,
+cool number
+);
+
+
+create or replace table stg_checkin(
+business_id varchar,
+dates varchar
+);
+
+create or replace table stg_yelp_user(
+user_id varchar,
+name varchar,
+review_count number,
+yelping_since date,
+useful number,
+funny number,
+cool number,
+avg_stars float
+);
+
+create or replace table stg_tip(
+user_id varchar,
+business_id varchar,
+tip_date date,
+compl_count number,
+tip_text varchar
+);
+
+// load data from temporary stage to staging tables
+
+create or replace file format my_json_format
+  type = 'json'
+  trim_space = true
+  strip_null_values = true
+  replace_invalid_characters = true;
+  
+create or replace stage my_stage
+  file_format = my_json_format;
+  
+
+copy into stg_covid (business_id, highlights, del_or_take, grubhub, call_to_act, req_a_quote, covid_banner, temp_closed, virtual_service)
+   from (select 
+         PARSE_JSON($1):business_id, 
+         PARSE_JSON($1):highlights, 
+         PARSE_JSON($1):"delivery or takeout", 
+         PARSE_JSON($1):"Grubhub enabled", 
+         PARSE_JSON($1):"Call To Action enabled", 
+         PARSE_JSON($1):"Request a Quote Enabled", 
+         PARSE_JSON($1):"Covid Banner", 
+         PARSE_JSON($1):"Temporary Closed Until", 
+         PARSE_JSON($1):"Virtual Services Offered" 
+         from @my_stage/covid.json.gz t)
+   on_error = 'continue';
+
+
+select PARSE_JSON($1) from @my_stage/covid.json.gz t;
+
+copy into stg_business (business_id, name, address, city, state, post_code, latitude, longitude, stars, review_count, is_open, attributes, categories, hours)
+   from (select 
+         PARSE_JSON($1):business_id, 
+         PARSE_JSON($1):name, 
+         PARSE_JSON($1):address, 
+         PARSE_JSON($1):city, 
+         PARSE_JSON($1):state, 
+         PARSE_JSON($1):postal_code, 
+         PARSE_JSON($1):latitude, 
+         PARSE_JSON($1):longitude, 
+         PARSE_JSON($1):stars, 
+         PARSE_JSON($1):review_count, 
+         PARSE_JSON($1):is_open , 
+         PARSE_JSON($1):attributes , 
+         PARSE_JSON($1):categories , 
+         PARSE_JSON($1):hours  
+         from @my_stage/yelp_academic_dataset_business.json.gz t)
+   on_error = 'continue';
+   
+select PARSE_JSON($1) from @my_stage/yelp_academic_dataset_tip.json.gz t;
+
+copy into stg_tip (user_id, business_id, tip_date, compl_count, tip_text)
+   from (select 
+         PARSE_JSON($1):business_id, 
+         PARSE_JSON($1):user_id, 
+         PARSE_JSON($1):date, 
+         PARSE_JSON($1):compliment_count, 
+         PARSE_JSON($1):text 
+         from @my_stage/yelp_academic_dataset_tip.json.gz t)
+   on_error = 'continue';
+
+   
+select PARSE_JSON($1) from @my_stage/yelp_academic_dataset_checkin.json.gz t;
+
+copy into stg_checkin (business_id, dates)
+   from (select 
+         PARSE_JSON($1):business_id, 
+         PARSE_JSON($1):date 
+         from @my_stage/yelp_academic_dataset_checkin.json.gz t)
+   on_error = 'continue';
+   
+
+copy into stg_review (review_id, business_id, user_id, stars, rev_date, rev_text, useful, funny, cool)
+  from (select 
+        PARSE_JSON($1):review_id, 
+        PARSE_JSON($1):business_id, 
+        PARSE_JSON($1):user_id,
+        PARSE_JSON($1):stars,
+        PARSE_JSON($1):date,
+        PARSE_JSON($1):text,
+        PARSE_JSON($1):useful,
+        PARSE_JSON($1):funny,
+        PARSE_JSON($1):cool
+        from @my_stage)
+  pattern='.*f[0-9].json.gz'
+  on_error = 'skip_file';
+  
+  copy into stg_review (review_id, business_id, user_id, stars, rev_date, rev_text, useful, funny, cool)
+  from (select 
+        PARSE_JSON($1):review_id, 
+        PARSE_JSON($1):business_id, 
+        PARSE_JSON($1):user_id,
+        PARSE_JSON($1):stars,
+        PARSE_JSON($1):date,
+        PARSE_JSON($1):text,
+        PARSE_JSON($1):use
+        PARSE_JSON($1):funny,
+        PARSE_JSON($1):cool
+        from @my_stage)
+  pattern='.*f1[0-9].json.gz'
+  on_error = 'skip_file';
+  
+  copy into stg_review (review_id, business_id, user_id, stars, rev_date, rev_text, useful, funny, cool)
+  from (select 
+        PARSE_JSON($1):review_id, 
+        PARSE_JSON($1):business_id, 
+        PARSE_JSON($1):user_id,
+        PARSE_JSON($1):stars,
+        PARSE_JSON($1):date,
+        PARSE_JSON($1):text,
+        PARSE_JSON($1):useful,
+        PARSE_JSON($1):funny,
+        PARSE_JSON($1):cool
+        from @my_stage)
+  pattern='.*f2[0-9].json.gz'
+  on_error = 'skip_file';
+  
+    copy into stg_yelp_user (user_id, name, review_count, yelping_since, useful, funny, cool, avg_stars)
+  from (select 
+        PARSE_JSON($1):user_id, 
+        PARSE_JSON($1):name, 
+        PARSE_JSON($1):review_count,
+        PARSE_JSON($1):yelping_since,
+        PARSE_JSON($1):useful,
+        PARSE_JSON($1):funny,
+        PARSE_JSON($1):cool,
+        PARSE_JSON($1):average_stars
+        from @my_stage)
+  pattern='.*r[0-9].json.gz'
+  on_error = 'skip_file';
+  
+  
+  list @my_stage;
+  
+  copy into stg_precipitation
+  from @my_stage/prec.csv.gz
+  file_format = (format_name = my_csv_format)
+  on_error = 'skip_file';
+  
+   copy into stg_temperature
+  from @my_stage/temp.csv.gz
+  file_format = (format_name = my_csv_format)
+  on_error = 'skip_file';
